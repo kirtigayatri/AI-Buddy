@@ -1,0 +1,648 @@
+import { useState, useEffect, useRef } from "react";
+import {
+  Copy,
+  Send,
+  Volume2,
+  VolumeX,
+  Sun,
+  Moon,
+  Share2,
+  Check,
+  Mic,
+  MicOff,
+  UserCircle, // Added UserCircle icon for the profile button
+} from "lucide-react";
+
+const cache = new Map();
+
+import Footer from "./Footer";
+
+function App() {
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [chatHistory, setChatHistory] = useState([]);
+  const [generatingAnswer, setGeneratingAnswer] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [recognition, setRecognition] = useState(null);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [darkMode, setDarkMode] = useState(true);
+  const [copiedIndex, setCopiedIndex] = useState(null);
+  const chatEndRef = useRef(null);
+  // Profile Pop-up start
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [profileData, setProfileData] = useState({
+    firstName: "",
+    lastName: "",
+    temperature: 0.7,
+    systemInstructions: ""
+  });
+  const [appliedProfile, setAppliedProfile] = useState({
+    firstName: "",
+    temperature: 0.7,
+    systemInstructions: ""
+  });
+
+  const normalizeTemperature = (value) => {
+    const numericValue = Number(value);
+    if (Number.isNaN(numericValue)) return 0.7;
+    return Math.min(1, Math.max(0, numericValue));
+  };
+
+  const buildCacheKey = (questionText, settings) =>
+    JSON.stringify({
+      question: questionText.trim(),
+      firstName: settings.firstName.trim(),
+      systemInstructions: settings.systemInstructions.trim(),
+      temperature: normalizeTemperature(settings.temperature),
+    });
+
+  // Submit Profile info
+  const handleProfileSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      // Calling backend service
+      console.log("Sending to backend:", profileData);
+      // const response = await fetch('/api/user/profile', { ... });
+
+      const savedFirstName = profileData.firstName.trim();
+      const savedProfile = {
+        firstName: savedFirstName,
+        temperature: normalizeTemperature(profileData.temperature),
+        systemInstructions: profileData.systemInstructions.trim(),
+      };
+
+      setUserName(savedFirstName || null); // Update the navbar name
+      setAppliedProfile(savedProfile); // Apply settings for Gemini requests
+      setIsProfileOpen(false); // Close modal on success
+      alert("Profile Updated!");
+    } catch (error) {
+      console.error("Failed to update profile", error);
+    }
+  };
+
+  // Placeholder state for teammate to integrate backend logic later
+  const [userName, setUserName] = useState(null);
+
+  const scrollToBottom = () => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [chatHistory]);
+
+  useEffect(() => {
+    setTimeout(() => setIsLoaded(true), 500);
+    if ("webkitSpeechRecognition" in window) {
+      const recognition = new window.webkitSpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = "en-US";
+
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript;
+        setQuestion(transcript);
+        setIsListening(false);
+      };
+
+      recognition.onerror = (event) => {
+        console.error("Speech recognition error:", event.error);
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      setRecognition(recognition);
+    }
+  }, []);
+
+  const toggleListening = () => {
+    if (!recognition) return;
+
+    if (isListening) {
+      recognition.stop();
+      setIsListening(false);
+    } else {
+      recognition.start();
+      setIsListening(true);
+    }
+  };
+
+  const toggleSpeaking = (text) => {
+    if (isSpeaking) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    } else {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "en-US";
+      utterance.onend = () => setIsSpeaking(false);
+      setIsSpeaking(true);
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  const copyToClipboard = (text, index) => {
+    navigator.clipboard.writeText(text);
+    setCopiedIndex(index);
+    setTimeout(() => setCopiedIndex(null), 2000);
+  };
+
+  const shareContent = async (text) => {
+    if (navigator.share) {
+      try {
+        await navigator.share({ text });
+      } catch {
+        console.log("Share cancelled");
+      }
+    } else {
+      copyToClipboard(text, -1);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!question.trim() || generatingAnswer) return;
+
+    setGeneratingAnswer(true);
+    const userQuestion = question;
+    setQuestion("");
+
+    setChatHistory((prev) => [
+      ...prev,
+      { type: "question", text: userQuestion },
+    ]);
+
+    const effectiveSettings = {
+      firstName: appliedProfile.firstName.trim(),
+      temperature: normalizeTemperature(appliedProfile.temperature),
+      systemInstructions: appliedProfile.systemInstructions.trim(),
+    };
+    const cacheKey = buildCacheKey(userQuestion, effectiveSettings);
+
+    if (cache.has(cacheKey)) {
+      setChatHistory((prev) => [
+        ...prev,
+        { type: "answer", text: cache.get(cacheKey) },
+      ]);
+      setGeneratingAnswer(false);
+      return;
+    }
+
+    const apiKey = import.meta.env.VITE_API_GENERATIVE_LANGUAGE_CLIENT;
+    let attempts = 0;
+    const maxAttempts = 3;
+    let delay = 2000;
+
+    const systemInstructionParts = [];
+    if (effectiveSettings.firstName) {
+      systemInstructionParts.push(
+        `The user's name is ${effectiveSettings.firstName}. If asked for their name, answer with this name.`
+      );
+    }
+    if (effectiveSettings.systemInstructions) {
+      systemInstructionParts.push(effectiveSettings.systemInstructions);
+    }
+
+    const requestBody = {
+      contents: [{ parts: [{ text: userQuestion }] }],
+      generationConfig: {
+        temperature: effectiveSettings.temperature,
+      },
+    };
+
+    if (systemInstructionParts.length > 0) {
+      requestBody.systemInstruction = {
+        parts: [{ text: systemInstructionParts.join("\n\n") }],
+      };
+    }
+
+    while (attempts < maxAttempts) {
+      try {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(requestBody),
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            throw { response: { status: 429 } };
+          }
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        if (data?.candidates?.length > 0) {
+          const fullAnswer = data.candidates[0].content.parts[0].text;
+          cache.set(cacheKey, fullAnswer);
+          setChatHistory((prev) => [
+            ...prev,
+            { type: "answer", text: fullAnswer },
+          ]);
+        } else {
+          throw new Error("Invalid API response structure");
+        }
+        break;
+      } catch (error) {
+        console.error("API Error:", error);
+
+        if (error.response?.status === 429) {
+          if (attempts < maxAttempts - 1) {
+            console.warn(`Rate limit hit. Retrying in ${delay / 1000} seconds...`);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            delay *= 2;
+            attempts++;
+          } else {
+            setChatHistory((prev) => [
+              ...prev,
+              { type: "answer", text: "Rate limit exceeded. Please try again later." },
+            ]);
+            break;
+          }
+        } else {
+          setChatHistory((prev) => [
+            ...prev,
+            { type: "answer", text: "Sorry, something went wrong. Please try again!" },
+          ]);
+          break;
+        }
+      }
+    }
+
+    setGeneratingAnswer(false);
+  };
+
+  const bgGradient = darkMode
+    ? "bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900"
+    : "bg-gradient-to-br from-blue-50 via-white to-indigo-50";
+  const navBg = darkMode ? "bg-slate-900/80" : "bg-white/80";
+  const chatBg = darkMode ? "bg-slate-800/50" : "bg-white/70";
+  const userBubble = darkMode
+    ? "bg-gradient-to-r from-blue-600 to-blue-500"
+    : "bg-gradient-to-r from-blue-500 to-indigo-500";
+  const aiBubble = darkMode ? "bg-slate-700/70" : "bg-slate-100";
+  const textColor = darkMode ? "text-white" : "text-slate-900";
+  const mutedText = darkMode ? "text-slate-400" : "text-slate-600";
+
+  return (
+    <div
+      className={`min-h-screen ${bgGradient} ${textColor} transition-all duration-700 ${isLoaded ? "opacity-100" : "opacity-0"
+        }`}
+    >
+      {/* Navbar */}
+      <nav
+        className={`${navBg} backdrop-blur-md border-b ${darkMode ? "border-slate-700" : "border-slate-200"
+          } sticky top-0 z-50`}
+      >
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-16">
+            <div className="flex items-center space-x-3">
+              <div
+                className={`w-10 h-10 rounded-xl bg-gradient-to-br ${darkMode
+                  ? "from-blue-500 to-purple-600"
+                  : "from-blue-400 to-indigo-500"
+                  } flex items-center justify-center shadow-lg`}
+              >
+                <span className="text-white font-bold text-lg">H</span>
+              </div>
+              <div>
+                <h1 className="text-xl font-bold bg-gradient-to-r from-blue-500 to-purple-600 bg-clip-text text-transparent">
+                  Helpmate AI
+                </h1>
+                <p className={`text-xs ${mutedText}`}>
+                  Your intelligent assistant
+                </p>
+              </div>
+            </div>
+
+            {/* Added container for right-side navbar items */}
+            <div className="flex items-center gap-4">
+              {/* Profile Button Placeholder for teammate integration */}
+              <button
+                onClick={() => setIsProfileOpen(true)} // Add this onClick
+                className={`flex items-center gap-2 p-2 rounded-lg transition-all duration-300 ${darkMode ? "hover:bg-slate-700 text-slate-300" : "hover:bg-slate-200 text-slate-700"
+                  }`}
+                title="Profile"
+              >
+                <UserCircle className="w-6 h-6" />
+                {/* Name will appear here once teammate sets the userName state */}
+                {userName && <span className="text-sm font-medium">{userName}</span>}
+              </button>
+
+              <button
+                onClick={() => setDarkMode(!darkMode)}
+                className={`p-2.5 rounded-lg ${darkMode
+                  ? "bg-slate-700 hover:bg-slate-600"
+                  : "bg-slate-200 hover:bg-slate-300"
+                  } transition-all duration-300`}
+              >
+                {darkMode ? (
+                  <Sun className="w-5 h-5" />
+                ) : (
+                  <Moon className="w-5 h-5" />
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      {/* Main Section */}
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6 pb-32">
+        {chatHistory.length === 0 ? (
+          <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4">
+            <div
+              className={`w-24 h-24 rounded-2xl bg-gradient-to-br ${darkMode
+                ? "from-blue-500 to-purple-600"
+                : "from-blue-400 to-indigo-500"
+                } flex items-center justify-center shadow-2xl animate-pulse`}
+            >
+              <span className="text-white font-bold text-4xl">H</span>
+            </div>
+            <div className="text-center">
+              {/* Dynamic Greeting */}
+              <h2 className="text-3xl font-bold">
+                {userName ? `Hello, ${userName}!` : "Hello!"} How can I help you today?
+              </h2>
+              <p className={`${mutedText} text-lg`}>
+                Ask me anything, I am here to assist
+              </p>
+            </div>
+
+            {/* Hero Prompts */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-3xl mt-8">
+              {[
+                "Write a poem about AI",
+                "Help me plan a trip",
+                "Tips for learning coding"
+              ].map((prompt, i) => (
+                <button
+                  key={i}
+                  onClick={() => setQuestion(prompt)}
+                  className={`p-4 rounded-xl ${chatBg} backdrop-blur-sm border shadow-md ${darkMode
+                    ? "border-slate-700 hover:border-blue-500"
+                    : "border-slate-200 hover:border-blue-400"
+                    } transition-all duration-300 text-center hover:scale-105`}
+                >
+                  <p className="font-medium">{prompt}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          /* Chat Area */
+          <div className="chat-container space-y-6">
+            {chatHistory.map((chat, index) => (
+              <div
+                key={index}
+                className={`flex ${chat.type === "question" ? "justify-end" : "justify-start"
+                  } animate-fade-in`}
+              >
+                <div
+                  className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 shadow-lg ${chat.type === "question"
+                    ? `${userBubble} text-white`
+                    : `${aiBubble} ${darkMode ? "text-slate-100" : "text-slate-800"
+                    }`
+                    }`}
+                >
+                  <div className="whitespace-pre-wrap break-words">
+                    {chat.text}
+                  </div>
+                  {chat.type === "answer" && (
+                    <div className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-500/30">
+                      <button
+                        onClick={() => toggleSpeaking(chat.text)}
+                        className={`p-2 rounded-lg transition-all ${darkMode ? "hover:bg-slate-600" : "hover:bg-slate-200"
+                          }`}
+                        title={isSpeaking ? "Stop" : "Read aloud"}
+                      >
+                        {isSpeaking ? (
+                          <VolumeX className="w-4 h-4" />
+                        ) : (
+                          <Volume2 className="w-4 h-4" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => copyToClipboard(chat.text, index)}
+                        className={`p-2 rounded-lg transition-all ${darkMode ? "hover:bg-slate-600" : "hover:bg-slate-200"
+                          }`}
+                        title="Copy"
+                      >
+                        {copiedIndex === index ? (
+                          <Check className="w-4 h-4 text-green-500" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => shareContent(chat.text)}
+                        className={`p-2 rounded-lg transition-all ${darkMode ? "hover:bg-slate-600" : "hover:bg-slate-200"
+                          }`}
+                        title="Share"
+                      >
+                        <Share2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {generatingAnswer && (
+              <div className="flex justify-start animate-fade-in">
+                <div
+                  className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 ${aiBubble} shadow-lg`}
+                >
+                  <div className="flex space-x-2">
+                    <div
+                      className={`w-2 h-2 rounded-full ${darkMode ? "bg-blue-400" : "bg-blue-500"
+                        } animate-bounce`}
+                      style={{ animationDelay: "0ms" }}
+                    ></div>
+                    <div
+                      className={`w-2 h-2 rounded-full ${darkMode ? "bg-blue-400" : "bg-blue-500"
+                        } animate-bounce`}
+                      style={{ animationDelay: "150ms" }}
+                    ></div>
+                    <div
+                      className={`w-2 h-2 rounded-full ${darkMode ? "bg-blue-400" : "bg-blue-500"
+                        } animate-bounce`}
+                      style={{ animationDelay: "300ms" }}
+                    ></div>
+                  </div>
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+        )}
+
+        {/* Chat Input */}
+        <div className="fixed bottom-20 left-0 right-0 px-4">
+          <div className="max-w-4xl mx-auto">
+            <div
+              className={`flex items-center gap-3 px-4 py-2 rounded-2xl shadow-lg border transition-all duration-300 ${darkMode
+                ? "bg-slate-800/90 border-slate-700"
+                : "bg-white/90 border-slate-200"
+                }`}
+            >
+              <textarea
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                placeholder="Ask me anything..."
+                rows={1}
+                className={`flex-1 bg-transparent outline-none resize-none py-2 text-sm leading-relaxed ${textColor}`}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSubmit();
+                  }
+                }}
+              />
+              {recognition && (
+                <button
+                  onClick={toggleListening}
+                  className={`p-3 rounded-xl transition-all duration-300 shadow-md ${isListening
+                    ? "bg-red-500 hover:bg-red-600"
+                    : "bg-slate-600 hover:bg-slate-500"
+                    }`}
+                  title={isListening ? "Stop listening" : "Start voice input"}
+                >
+                  {isListening ? (
+                    <MicOff className="w-5 h-5 text-white" />
+                  ) : (
+                    <Mic className="w-5 h-5 text-white" />
+                  )}
+                </button>
+              )}
+              <button
+                onClick={handleSubmit}
+                disabled={generatingAnswer || !question.trim()}
+                className="p-3 rounded-xl bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 disabled:opacity-50 transition-all duration-300 shadow-md"
+              >
+                <Send className="w-5 h-5 text-white" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div
+        className="fixed bottom-0 left-0 right-0 border-t bg-gradient-to-t from-black/20 to-transparent backdrop-blur-md"
+        style={{
+          borderColor: darkMode ? "rgb(51, 65, 85)" : "rgb(226, 232, 240)",
+        }}
+      >
+        <Footer darkMode={darkMode} />
+      </div>
+
+      {/* Animations */}
+      <style>{`
+        @keyframes fade-in {
+          from {
+            opacity: 0;
+            transform: translateY(10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .animate-fade-in {
+          animation: fade-in 0.3s ease-out;
+        }
+        .chat-container {
+          max-height: calc(100vh - 220px);
+          overflow-y: auto;
+          scroll-behavior: smooth;
+        }
+      `}</style>
+
+    {/* Profile Modal */}
+    {isProfileOpen && (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+        <div className={`${darkMode ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"}
+          border rounded-3xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all`}>
+
+          {/* Modal Header */}
+          <div className="flex justify-between items-center p-6 border-b border-slate-700/50">
+            <h3 className="text-xl font-bold">User Profile</h3>
+            <button
+              onClick={() => setIsProfileOpen(false)}
+              className={`p-1 rounded-full ${darkMode ? "hover:bg-slate-800" : "hover:bg-slate-100"}`}
+            >
+              <VolumeX className="w-6 h-6 rotate-45" /> {/* Using VolumeX as a placeholder for a close 'X' icon */}
+            </button>
+          </div>
+
+          {/* Modal Body / Form */}
+          <form onSubmit={handleProfileSubmit} className="p-6 space-y-5">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className={`text-xs font-semibold uppercase tracking-wider ${mutedText}`}>First Name</label>
+                <input
+                  type="text"
+                  required
+                  className={`w-full p-3 rounded-xl border outline-none transition-all ${darkMode ? "bg-slate-800 border-slate-700 focus:border-blue-500" : "bg-slate-50 border-slate-200 focus:border-blue-400"}`}
+                  value={profileData.firstName}
+                  onChange={(e) => setProfileData({...profileData, firstName: e.target.value})}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className={`text-xs font-semibold uppercase tracking-wider ${mutedText}`}>Last Name</label>
+                <input
+                  type="text"
+                  className={`w-full p-3 rounded-xl border outline-none transition-all ${darkMode ? "bg-slate-800 border-slate-700 focus:border-blue-500" : "bg-slate-50 border-slate-200 focus:border-blue-400"}`}
+                  value={profileData.lastName}
+                  onChange={(e) => setProfileData({...profileData, lastName: e.target.value})}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex justify-between">
+                <label className={`text-xs font-semibold uppercase tracking-wider ${mutedText}`}>Temperature</label>
+                <span className="text-xs font-mono text-blue-500">{profileData.temperature}</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.1"
+                className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                value={profileData.temperature}
+                onChange={(e) => setProfileData({...profileData, temperature: parseFloat(e.target.value)})}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className={`text-xs font-semibold uppercase tracking-wider ${mutedText}`}>System Instructions</label>
+              <textarea
+                rows={3}
+                className={`w-full p-3 rounded-xl border outline-none resize-none transition-all ${darkMode ? "bg-slate-800 border-slate-700 focus:border-blue-500" : "bg-slate-50 border-slate-200 focus:border-blue-400"}`}
+                placeholder="e.g. You are a helpful assistant that speaks like a pirate."
+                value={profileData.systemInstructions}
+                onChange={(e) => setProfileData({...profileData, systemInstructions: e.target.value})}
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="w-full py-4 rounded-xl bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white font-bold shadow-lg transition-all active:scale-[0.98]"
+            >
+              Save Profile Settings
+            </button>
+          </form>
+        </div>
+      </div>
+    )}
+    </div>
+  );
+}
+
+export default App;
