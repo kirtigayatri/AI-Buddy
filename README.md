@@ -1,9 +1,4 @@
 <div align="center">                                                                                                
-  
-  ![GitHub repo size](https://img.shields.io/github/repo-size/codeaashu/Helpmate-AI)
-  ![GitHub stars](https://img.shields.io/github/stars/codeaashu/Helpmate-AI?style=social) 
-  ![GitHub forks](https://img.shields.io/github/forks/codeaashu/Helpmate-AI?style=social)
-[![Twitter Follow](https://img.shields.io/twitter/follow/warrior_aashuu?style=social)](https://twitter.com/intent/follow?screen_name=warrior_aashuu)
 
 <img src="https://user-images.githubusercontent.com/74038190/212284100-561aa473-3905-4a80-b561-0d28506553ee.gif" width="2300">
   <h1 align="center">🤖 Introducing to Helpmate AI 🤖</h1>
@@ -90,7 +85,7 @@ To run this web application locally, first get google gemini API key from: [api-
   
 `How can you contribute in this projects? 🫱🏻‍🫲🏼`
 
-If you have a good knowledge in Tailwind CSS or React JS and want to contribute in this project just forked this repository and the improve the 𝐔𝐈 of Helpmate and then feel free to open an issue or submit a pull request. I reviewed your changes update and then merge your pull request. Please make sure to follow the existing code style and guidelines.
+If you have a good knowledge in Tailwind CSS or React JS and want to contribute in this project just forked this repository and the improve the 𝐔𝐈 of Helpmate and then feel free to open an issue or submit a pull request. I will review your suggested changes and then merge your pull request. Please make sure to follow the existing code style and guidelines.
 
 `Don't forget to give star this repository ⭐`
 
